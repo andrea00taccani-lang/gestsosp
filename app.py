@@ -9,11 +9,11 @@ app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_conn():
-    # Aggiungiamo sslmode per sicurezza su Render
-    if "sslmode" not in DATABASE_URL:
-        conn_url = f"{DATABASE_URL}?sslmode=require"
-    else:
-        conn_url = DATABASE_URL
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL non trovata nelle variabili d'ambiente!")
+    conn_url = DATABASE_URL
+    if "sslmode" not in conn_url:
+        conn_url += "?sslmode=require"
     return psycopg2.connect(conn_url)
 
 def init_db():
@@ -27,14 +27,14 @@ def init_db():
                 prodotto TEXT,
                 quantita INTEGER DEFAULT 1,
                 note TEXT,
-                stato TEXT, -- 'ordinati', 'arrivati', 'ritirati'
+                pagato BOOLEAN DEFAULT FALSE,
+                stato TEXT, 
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """)
-    print("Database inizializzato correttamente.")
+    print("Database inizializzato.")
 
 def cleanup_old_records():
-    # Elimina i ritirati più vecchi di 7 giorni
     limit = datetime.now() - timedelta(days=7)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -49,11 +49,11 @@ def list_items():
     cleanup_old_records()
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, stato FROM sospesi ORDER BY updated_at DESC")
+            cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY updated_at DESC")
             rows = cur.fetchall()
     return jsonify([{
         "id": r[0], "cognome": r[1], "nome": r[2], 
-        "prodotto": r[3], "quantita": r[4], "note": r[5], "stato": r[6]
+        "prodotto": r[3], "quantita": r[4], "note": r[5], "pagato": r[6], "stato": r[7]
     } for r in rows])
 
 @app.route("/api/new", methods=["POST"])
@@ -62,8 +62,8 @@ def new():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, stato, updated_at) VALUES (%s,%s,%s,%s,%s,'ordinati',%s)",
-                (data["cognome"], data["nome"], data["prodotto"], data["quantita"], data["note"], datetime.now())
+                "INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, pagato, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,'ordinati',%s)",
+                (data["cognome"], data["nome"], data["prodotto"], data["quantita"], data["note"], data["pagato"], datetime.now())
             )
     return "ok"
 
@@ -86,89 +86,75 @@ def delete():
             cur.execute("DELETE FROM sospesi WHERE id=%s", (data["id"],))
     return "ok"
 
-# --- INTERFACCIA PROFESSIONALE ---
+# --- INTERFACCIA ---
 PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="it">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestione Sospesi Farmacia</title>
+    <title>Farmacia Sospesi Pro</title>
     <link href="https://googleapis.com" rel="stylesheet">
     <style>
-        :root { --primary: #2d6a4f; --accent: #40916c; --bg: #f8f9fa; --card: #ffffff; --text: #1b4332; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { text-align: center; color: var(--primary); font-weight: 600; margin-bottom: 30px; border-bottom: 3px solid var(--primary); padding-bottom: 10px; }
+        :root { --primary: #1a7431; --accent: #2dc653; --bg: #f0f2f5; --red: #e63946; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); margin: 0; padding: 20px; }
+        .container { max-width: 1300px; margin: 0 auto; }
+        h1 { text-align: center; color: var(--primary); }
         
-        /* Form Styling */
-        .form-card { background: var(--card); padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 30px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; align-items: end; }
-        .form-group { display: flex; flex-direction: column; }
-        label { font-size: 12px; font-weight: 600; margin-bottom: 5px; text-transform: uppercase; color: #666; }
-        input, textarea { padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
-        button.btn-add { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.3s; }
-        button.btn-add:hover { background: var(--accent); }
+        .form-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 25px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+        .form-group { display: flex; flex-direction: column; flex: 1; min-width: 140px; }
+        label { font-size: 11px; font-weight: 700; color: #555; margin-bottom: 4px; text-transform: uppercase; }
+        input, select { padding: 10px; border: 1px solid #ccd0d5; border-radius: 6px; }
+        
+        .btn-add { background: var(--primary); color: white; border: none; padding: 11px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; height: 41px; }
 
-        /* Board Layout */
-        .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
-        .column { background: #ebf2ed; padding: 15px; border-radius: 12px; min-height: 400px; }
-        .column h2 { font-size: 18px; text-align: center; text-transform: uppercase; letter-spacing: 1px; color: var(--primary); margin-top: 0; }
+        .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; }
+        .column { background: #dfe3e8; padding: 15px; border-radius: 12px; min-height: 500px; }
+        .column h2 { font-size: 16px; color: #333; text-align: center; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
         
-        /* Card Sospeso */
-        .item-card { background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 5px solid var(--accent); position: relative; }
-        .item-card b { font-size: 16px; display: block; margin-bottom: 5px; color: #000; }
-        .item-card p { margin: 3px 0; font-size: 14px; color: #444; }
-        .note { font-style: italic; color: #777; font-size: 13px; margin-top: 8px !important; border-top: 1px solid #eee; padding-top: 5px; }
-        .actions { margin-top: 15px; display: flex; gap: 8px; flex-wrap: wrap; }
-        .btn { border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; font-weight: 600; transition: 0.2s; }
-        .btn-move { background: #d8f3dc; color: var(--primary); }
-        .btn-move:hover { background: var(--primary); color: white; }
-        .btn-del { background: #ffe5ec; color: #fb6f92; margin-left: auto; }
-        .badge-qty { background: var(--primary); color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px; float: right; }
+        .item-card { background: white; padding: 15px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); position: relative; border-left: 6px solid #ccc; }
+        .status-ordinati { border-left-color: #ffb703; }
+        .status-arrivati { border-left-color: #219ebc; }
+        .status-ritirati { border-left-color: var(--accent); }
+        
+        .badge-pagato { background: #d8f3dc; color: #1b4332; padding: 3px 8px; border-radius: 5px; font-size: 10px; font-weight: bold; }
+        .badge-nonpagato { background: #ffdada; color: #800000; padding: 3px 8px; border-radius: 5px; font-size: 10px; font-weight: bold; }
+        
+        .card-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; }
+        .card-title { font-weight: 700; font-size: 16px; margin: 0; }
+        .card-prodotto { color: var(--primary); font-weight: 600; margin: 5px 0; }
+        .card-note { font-size: 13px; color: #666; background: #f9f9f9; padding: 5px; border-radius: 4px; margin-top: 8px; }
+        
+        .actions { margin-top: 15px; display: flex; gap: 8px; border-top: 1px solid #eee; padding-top: 10px; }
+        .btn-action { flex: 1; border: none; padding: 8px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer; background: #f0f2f5; color: #444; }
+        .btn-action:hover { background: #e4e6e9; }
+        .btn-del { color: var(--red); background: #fff1f2; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>🏥 GESTIONE SOSPESI FARMACIA</h1>
+    <h1>🏥 GESTIONALE SOSPESI v2.0</h1>
 
     <div class="form-card">
-        <div class="form-group">
-            <label>Cognome</label>
-            <input type="text" id="cognome" placeholder="es. Rossi">
+        <div class="form-group"><label>Cognome</label><input type="text" id="cognome"></div>
+        <div class="form-group"><label>Nome</label><input type="text" id="nome"></div>
+        <div class="form-group"><label>Prodotto</label><input type="text" id="prodotto"></div>
+        <div class="form-group" style="flex:0.3"><label>Q.tà</label><input type="number" id="quantita" value="1"></div>
+        <div class="form-group"><label>Pagamento</label>
+            <select id="pagato">
+                <option value="false">DA PAGARE</option>
+                <option value="true">GIÀ PAGATO</option>
+            </select>
         </div>
-        <div class="form-group">
-            <label>Nome</label>
-            <input type="text" id="nome" placeholder="es. Mario">
-        </div>
-        <div class="form-group">
-            <label>Prodotto</label>
-            <input type="text" id="prodotto" placeholder="es. Tachipirina 1000">
-        </div>
-        <div class="form-group" style="flex: 0.5;">
-            <label>Q.tà</label>
-            <input type="number" id="quantita" value="1" min="1">
-        </div>
-        <div class="form-group">
-            <label>Note</label>
-            <input type="text" id="note" placeholder="es. Urgente, paga dopo">
-        </div>
-        <button class="btn-add" onclick="add()">+ NUOVO SOSPESO</button>
+        <div class="form-group"><label>Note</label><input type="text" id="note"></div>
+        <button class="btn-add" onclick="add()">REGISTRA</button>
     </div>
 
     <div class="board">
-        <div class="column">
-            <h2>📦 Ordinati</h2>
-            <div id="ordinati"></div>
-        </div>
-        <div class="column">
-            <h2>🚚 Arrivati</h2>
-            <div id="arrivati"></div>
-        </div>
-        <div class="column">
-            <h2>✅ Ritirati</h2>
-            <div id="ritirati"></div>
-        </div>
+        <div class="column"><h2>📦 ORDINATI</h2><div id="ordinati"></div></div>
+        <div class="column"><h2>🚚 ARRIVATI IN FARMACIA</h2><div id="arrivati"></div></div>
+        <div class="column"><h2>✅ RITIRATI (Auto-clean 7gg)</h2><div id="ritirati"></div></div>
     </div>
 </div>
 
@@ -176,23 +162,26 @@ PAGE_HTML = """
 async function load(){
     const res = await fetch("/api/list");
     const data = await res.json();
-    render("ordinati", data.filter(x => x.stato == "ordinati"), "arrivati", "📦 Segna Arrivato");
-    render("arrivati", data.filter(x => x.stato == "arrivati"), "ritirati", "✅ Segna Ritirato");
+    render("ordinati", data.filter(x => x.stato == "ordinati"), "arrivati", "➔ Arrivato");
+    render("arrivati", data.filter(x => x.stato == "arrivati"), "ritirati", "➔ Ritirato");
     render("ritirati", data.filter(x => x.stato == "ritirati"), null, null);
 }
 
 function render(containerId, items, nextStato, btnLabel){
     let html = "";
     items.forEach(r => {
+        const pagatoBadge = r.pagato ? '<span class="badge-pagato">€ PAGATO</span>' : '<span class="badge-nonpagato">€ DA PAGARE</span>';
         html += `
-        <div class="item-card">
-            <span class="badge-qty">Q.tà: ${r.quantita}</span>
-            <b>${r.cognome.toUpperCase()} ${r.nome}</b>
-            <p>💊 ${r.prodotto}</p>
-            ${r.note ? `<p class="note">📝 ${r.note}</p>` : ''}
+        <div class="item-card status-${r.stato}">
+            <div class="card-header">
+                <p class="card-title">${r.cognome.toUpperCase()} ${r.nome}</p>
+                ${pagatoBadge}
+            </div>
+            <p class="card-prodotto">${r.quantita}x ${r.prodotto}</p>
+            ${r.note ? `<div class="card-note"><b>Nota:</b> ${r.note}</div>` : ''}
             <div class="actions">
-                ${nextStato ? `<button class="btn btn-move" onclick="move(${r.id},'${nextStato}')">${btnLabel}</button>` : ''}
-                <button class="btn btn-del" onclick="del(${r.id})">Elimina</button>
+                ${nextStato ? `<button class="btn-action" onclick="move(${r.id},'${nextStato}')">${btnLabel}</button>` : ''}
+                <button class="btn-action btn-del" onclick="del(${r.id})">Elimina</button>
             </div>
         </div>`;
     });
@@ -200,55 +189,33 @@ function render(containerId, items, nextStato, btnLabel){
 }
 
 async function add(){
-    const payload = {
+    const data = {
         cognome: document.getElementById("cognome").value,
         nome: document.getElementById("nome").value,
         prodotto: document.getElementById("prodotto").value,
         quantita: document.getElementById("quantita").value,
+        pagato: document.getElementById("pagato").value === "true",
         note: document.getElementById("note").value
     };
-    if(!payload.cognome || !payload.prodotto) return alert("Inserisci almeno Cognome e Prodotto!");
-    
-    await fetch("/api/new", {
-        method:"POST", 
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(payload)
-    });
-    
-    // Pulisci campi
-    document.querySelectorAll("input").forEach(i => { if(i.id != 'quantita') i.value = "" });
+    if(!data.cognome || !data.prodotto) return alert("Manca Cognome o Prodotto!");
+    await fetch("/api/new", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)});
+    document.querySelectorAll(".form-card input").forEach(i => { if(i.id!='quantita') i.value="" });
     load();
 }
 
 async function move(id, stato){
-    await fetch("/api/move", {
-        method:"POST", 
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({id, stato})
-    });
+    await fetch("/api/move", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, stato})});
     load();
 }
 
 async function del(id){
-    if(confirm("Vuoi davvero eliminare questo sospeso?")){
-        await fetch("/api/delete", {
-            method:"POST", 
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({id})
-        });
+    if(confirm("Eliminare definitivamente?")) {
+        await fetch("/api/delete", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id})});
         load();
     }
 }
-
-setInterval(load, 30000); // Ricarica ogni 30 secondi per aggiornare i dati
 load();
+setInterval(load, 20000);
 </script>
 </body>
 </html>
-"""
-
-if __name__ == "__main__":
-    init_db()
-    # Porta dinamica per Render
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
