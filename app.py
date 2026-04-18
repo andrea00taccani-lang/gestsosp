@@ -5,94 +5,102 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Configurazione Database
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_conn():
     if not DATABASE_URL:
-        raise ValueError("DATABASE_URL non trovata!")
+        raise ValueError("DATABASE_URL mancante!")
+    # Assicuriamoci che SSL sia attivo
     conn_url = DATABASE_URL
     if "sslmode" not in conn_url:
         conn_url += "?sslmode=require"
     return psycopg2.connect(conn_url)
 
+# Funzione migliorata per creare la tabella se manca
 def init_db():
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS sospesi (
-                    id SERIAL PRIMARY KEY,
-                    cognome TEXT,
-                    nome TEXT,
-                    prodotto TEXT,
-                    quantita INTEGER DEFAULT 1,
-                    note TEXT,
-                    pagato BOOLEAN DEFAULT FALSE,
-                    stato TEXT, 
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """)
-        print("Database pronto.")
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sospesi (
+                id SERIAL PRIMARY KEY,
+                cognome TEXT,
+                nome TEXT,
+                prodotto TEXT,
+                quantita INTEGER DEFAULT 1,
+                note TEXT,
+                pagato BOOLEAN DEFAULT FALSE,
+                stato TEXT DEFAULT 'ordinati',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Tabella verificata/creata correttamente.")
     except Exception as e:
-        print(f"Errore init_db: {e}")
-
-def cleanup_old_records():
-    try:
-        limit = datetime.now() - timedelta(days=7)
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM sospesi WHERE stato='ritirati' AND updated_at < %s", (limit,))
-    except Exception as e:
-        print(f"Errore cleanup: {e}")
+        print(f"Errore inizializzazione DB: {e}")
 
 @app.route("/")
 def home():
+    init_db() # Forza il controllo tabella ogni volta che si apre il sito
     return render_template_string(PAGE_HTML)
 
 @app.route("/api/list")
 def list_items():
-    cleanup_old_records()
+    # Elimina vecchi record
+    limit = datetime.now() - timedelta(days=7)
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY updated_at DESC")
-                rows = cur.fetchall()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sospesi WHERE stato='ritirati' AND updated_at < %s", (limit,))
+        cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY updated_at DESC")
+        rows = cur.fetchall()
+        conn.commit()
+        cur.close()
+        conn.close()
         return jsonify([{
             "id": r[0], "cognome": r[1], "nome": r[2], 
             "prodotto": r[3], "quantita": r[4], "note": r[5], "pagato": r[6], "stato": r[7]
         } for r in rows])
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        init_db() # Se fallisce perché manca tabella, prova a crearla
+        return jsonify([])
 
 @app.route("/api/new", methods=["POST"])
 def new():
     data = request.json
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, pagato, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,'ordinati',%s)",
-                (data["cognome"], data["nome"], data["prodotto"], data["quantita"], data["note"], data["pagato"], datetime.now())
-            )
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, pagato, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,'ordinati',%s)",
+        (data["cognome"], data["nome"], data["prodotto"], data["quantita"], data["note"], data["pagato"], datetime.now())
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
     return "ok"
 
 @app.route("/api/move", methods=["POST"])
 def move():
     data = request.json
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE sospesi SET stato=%s, updated_at=%s WHERE id=%s",
-                (data["stato"], datetime.now(), data["id"])
-            )
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE sospesi SET stato=%s, updated_at=%s WHERE id=%s", (data["stato"], datetime.now(), data["id"]))
+    conn.commit()
+    cur.close()
+    conn.close()
     return "ok"
 
 @app.route("/api/delete", methods=["POST"])
 def delete():
     data = request.json
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM sospesi WHERE id=%s", (data["id"],))
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sospesi WHERE id=%s", (data["id"],))
+    conn.commit()
+    cur.close()
+    conn.close()
     return "ok"
 
 PAGE_HTML = """
@@ -134,7 +142,7 @@ PAGE_HTML = """
 </head>
 <body>
 <div class="container">
-    <h1>🏥 GESTIONALE SOSPESI v2.1</h1>
+    <h1>🏥 GESTIONALE SOSPESI v2.2</h1>
     <div class="form-card">
         <div class="form-group"><label>Cognome</label><input type="text" id="cognome"></div>
         <div class="form-group"><label>Nome</label><input type="text" id="nome"></div>
@@ -155,7 +163,6 @@ async function load(){
     try {
         const res = await fetch("/api/list");
         const data = await res.json();
-        if(data.error) return console.error(data.error);
         render("ordinati", data.filter(x => x.stato == "ordinati"), "arrivati", "➔ Arrivato");
         render("arrivati", data.filter(x => x.stato == "arrivati"), "ritirati", "➔ Ritirato");
         render("ritirati", data.filter(x => x.stato == "ritirati"), null, null);
