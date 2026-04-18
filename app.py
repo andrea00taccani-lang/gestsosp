@@ -8,99 +8,87 @@ app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_conn():
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL mancante!")
-    # Assicuriamoci che SSL sia attivo
     conn_url = DATABASE_URL
     if "sslmode" not in conn_url:
         conn_url += "?sslmode=require"
     return psycopg2.connect(conn_url)
 
-# Funzione migliorata per creare la tabella se manca
 def init_db():
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS sospesi (
-                id SERIAL PRIMARY KEY,
-                cognome TEXT,
-                nome TEXT,
-                prodotto TEXT,
-                quantita INTEGER DEFAULT 1,
-                note TEXT,
-                pagato BOOLEAN DEFAULT FALSE,
-                stato TEXT DEFAULT 'ordinati',
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("Tabella verificata/creata correttamente.")
-    except Exception as e:
-        print(f"Errore inizializzazione DB: {e}")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS sospesi (
+                        id SERIAL PRIMARY KEY,
+                        cognome TEXT, nome TEXT, prodotto TEXT,
+                        quantita INTEGER DEFAULT 1, note TEXT,
+                        pagato BOOLEAN DEFAULT FALSE, stato TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+    except Exception as e: print(f"Errore DB: {e}")
 
 @app.route("/")
 def home():
-    init_db() # Forza il controllo tabella ogni volta che si apre il sito
+    init_db()
     return render_template_string(PAGE_HTML)
 
 @app.route("/api/list")
 def list_items():
-    # Elimina vecchi record
     limit = datetime.now() - timedelta(days=7)
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM sospesi WHERE stato='ritirati' AND updated_at < %s", (limit,))
-        cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY updated_at DESC")
-        rows = cur.fetchall()
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify([{
-            "id": r[0], "cognome": r[1], "nome": r[2], 
-            "prodotto": r[3], "quantita": r[4], "note": r[5], "pagato": r[6], "stato": r[7]
-        } for r in rows])
-    except Exception as e:
-        init_db() # Se fallisce perché manca tabella, prova a crearla
-        return jsonify([])
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM sospesi WHERE stato='ritirati' AND updated_at < %s", (limit,))
+                cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY cognome ASC")
+                rows = cur.fetchall()
+        return jsonify([{"id":r[0],"cognome":r[1],"nome":r[2],"prodotto":r[3],"quantita":r[4],"note":r[5],"pagato":r[6],"stato":r[7]} for r in rows])
+    except: return jsonify([])
 
-@app.route("/api/new", methods=["POST"])
-def new():
+@app.route("/api/new_multiple", methods=["POST"])
+def new_multiple():
     data = request.json
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, pagato, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,'ordinati',%s)",
-        (data["cognome"], data["nome"], data["prodotto"], data["quantita"], data["note"], data["pagato"], datetime.now())
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for p in data.get("prodotti", []):
+                cur.execute("INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, pagato, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,'ordinati',%s)",
+                    (data["cognome"].upper(), data["nome"], p['prodotto'], p['quantita'], p['note'], p['pagato'], datetime.now()))
+    return "ok"
+
+@app.route("/api/split", methods=["POST"])
+def split_item():
+    data = request.json
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi WHERE id=%s", (data["id"],))
+            orig = cur.fetchone()
+            if not orig: return "error", 404
+            
+            qty_orig = int(orig[3])
+            qty_moved = int(data["qty_moved"])
+            
+            if qty_moved >= qty_orig:
+                cur.execute("UPDATE sospesi SET stato=%s, updated_at=%s WHERE id=%s", (data["next_stato"], datetime.now(), data["id"]))
+            else:
+                cur.execute("UPDATE sospesi SET quantita=%s WHERE id=%s", (qty_orig - qty_moved, data["id"]))
+                cur.execute("INSERT INTO sospesi (cognome, nome, prodotto, quantita, note, pagato, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (orig[0], orig[1], orig[2], qty_moved, orig[4], orig[5], data["next_stato"], datetime.now()))
     return "ok"
 
 @app.route("/api/move", methods=["POST"])
 def move():
     data = request.json
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("UPDATE sospesi SET stato=%s, updated_at=%s WHERE id=%s", (data["stato"], datetime.now(), data["id"]))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE sospesi SET stato=%s, updated_at=%s WHERE id=%s", (data["stato"], datetime.now(), data["id"]))
     return "ok"
 
 @app.route("/api/delete", methods=["POST"])
 def delete():
     data = request.json
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM sospesi WHERE id=%s", (data["id"],))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM sospesi WHERE id=%s", (data["id"],))
     return "ok"
 
 PAGE_HTML = """
@@ -109,105 +97,119 @@ PAGE_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Farmacia Sospesi Pro</title>
-    <link href="https://googleapis.com" rel="stylesheet">
+    <title>Farmacia Sospesi Pro v2.5</title>
     <style>
-        :root { --primary: #1a7431; --accent: #2dc653; --bg: #f0f2f5; --red: #e63946; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); margin: 0; padding: 20px; }
-        .container { max-width: 1300px; margin: 0 auto; }
-        h1 { text-align: center; color: var(--primary); }
-        .form-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 25px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
-        .form-group { display: flex; flex-direction: column; flex: 1; min-width: 140px; }
-        label { font-size: 11px; font-weight: 700; color: #555; margin-bottom: 4px; text-transform: uppercase; }
-        input, select { padding: 10px; border: 1px solid #ccd0d5; border-radius: 6px; }
-        .btn-add { background: var(--primary); color: white; border: none; padding: 11px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; height: 41px; }
-        .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; }
-        .column { background: #dfe3e8; padding: 15px; border-radius: 12px; min-height: 500px; }
-        .column h2 { font-size: 16px; color: #333; text-align: center; border-bottom: 2px solid #ccc; padding-bottom: 10px; }
-        .item-card { background: white; padding: 15px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); position: relative; border-left: 6px solid #ccc; }
-        .status-ordinati { border-left-color: #ffb703; }
-        .status-arrivati { border-left-color: #219ebc; }
-        .status-ritirati { border-left-color: var(--accent); }
-        .badge-pagato { background: #d8f3dc; color: #1b4332; padding: 3px 8px; border-radius: 5px; font-size: 10px; font-weight: bold; }
-        .badge-nonpagato { background: #ffdada; color: #800000; padding: 3px 8px; border-radius: 5px; font-size: 10px; font-weight: bold; }
-        .card-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; }
-        .card-title { font-weight: 700; font-size: 16px; margin: 0; }
-        .card-prodotto { color: var(--primary); font-weight: 600; margin: 5px 0; }
-        .card-note { font-size: 13px; color: #666; background: #f9f9f9; padding: 5px; border-radius: 4px; margin-top: 8px; }
-        .actions { margin-top: 15px; display: flex; gap: 8px; border-top: 1px solid #eee; padding-top: 10px; }
-        .btn-action { flex: 1; border: none; padding: 8px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer; background: #f0f2f5; color: #444; }
-        .btn-action:hover { background: #e4e6e9; }
-        .btn-del { color: var(--red); background: #fff1f2; }
+        :root { --primary: #1a7431; --bg: #f1f5f9; --red: #e11d48; --accent: #219ebc; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); margin: 0; padding: 10px; font-size: 14px; }
+        .container { max-width: 1600px; margin: 0 auto; }
+        .header { background: white; padding: 10px 20px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .entry-box { background: white; padding: 15px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-top: 4px solid var(--primary); }
+        .client-inputs { display: flex; gap: 10px; margin-bottom: 10px; }
+        .prod-row { display: grid; grid-template-columns: 2fr 70px 1.5fr 130px; gap: 8px; margin-bottom: 5px; }
+        input, select { padding: 8px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 13px; }
+        input:focus { outline: 2px solid var(--primary); border-color: transparent; }
+        .btn-add { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-add:hover { background: #145a27; }
+        .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 12px; align-items: start; }
+        .column { background: #e2e8f0; padding: 12px; border-radius: 10px; min-height: 80vh; }
+        .column h2 { text-align: center; font-size: 13px; color: #475569; text-transform: uppercase; margin: 0 0 10px 0; letter-spacing: 1px; }
+        .card { background: white; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #94a3b8; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .card-name { font-weight: 800; font-size: 15px; color: #0f172a; margin-bottom: 2px; }
+        .card-prod { color: var(--primary); font-weight: 700; margin-bottom: 5px; border-bottom: 1px solid #f1f5f9; padding-bottom: 3px; }
+        .badge { font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 800; text-transform: uppercase; }
+        .bg-paid { background: #dcfce7; color: #166534; }
+        .bg-unpaid { background: #fee2e2; color: #991b1b; }
+        .actions { display: flex; gap: 4px; margin-top: 10px; }
+        .btn-v { flex: 1; padding: 7px 4px; font-size: 10px; cursor: pointer; border: 1px solid #e2e8f0; border-radius: 4px; background: #fff; font-weight: 700; transition: 0.1s; }
+        .btn-v:hover { background: #f8fafc; border-color: #94a3b8; }
+        .btn-split { color: var(--accent); border-color: var(--accent); }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>🏥 GESTIONALE SOSPESI v2.2</h1>
-    <div class="form-card">
-        <div class="form-group"><label>Cognome</label><input type="text" id="cognome"></div>
-        <div class="form-group"><label>Nome</label><input type="text" id="nome"></div>
-        <div class="form-group"><label>Prodotto</label><input type="text" id="prodotto"></div>
-        <div class="form-group" style="flex:0.3"><label>Q.tà</label><input type="number" id="quantita" value="1"></div>
-        <div class="form-group"><label>Pagamento</label><select id="pagato"><option value="false">DA PAGARE</option><option value="true">GIÀ PAGATO</option></select></div>
-        <div class="form-group"><label>Note</label><input type="text" id="note"></div>
-        <button class="btn-add" onclick="add()">REGISTRA</button>
+    <div class="header">
+        <h1 style="margin:0; font-size:18px; color:var(--primary)">🏥 FARMACIA SOSPESI</h1>
+        <div id="clock" style="font-weight:bold; color:#64748b"></div>
+    </div>
+    <div class="entry-box">
+        <div class="client-inputs">
+            <input type="text" id="m_cog" placeholder="COGNOME CLIENTE" style="flex:1; font-weight:bold">
+            <input type="text" id="m_nom" placeholder="Nome" style="flex:1">
+        </div>
+        <div id="p_rows"></div>
+        <button class="btn-add" onclick="save()" style="margin-top:10px; width:100%">REGISTRA ORDINE</button>
     </div>
     <div class="board">
-        <div class="column"><h2>📦 ORDINATI</h2><div id="ordinati"></div></div>
-        <div class="column"><h2>🚚 ARRIVATI IN FARMACIA</h2><div id="arrivati"></div></div>
-        <div class="column"><h2>✅ RITIRATI</h2><div id="ritirati"></div></div>
+        <div class="column" style="border-top:4px solid #f59e0b"><h2>📦 Da Ordinare</h2><div id="col_ordinati"></div></div>
+        <div class="column" style="border-top:4px solid var(--accent)"><h2>🚚 In Farmacia</h2><div id="col_arrivati"></div></div>
+        <div class="column" style="border-top:4px solid var(--primary)"><h2>✅ Ritirati</h2><div id="col_ritirati"></div></div>
     </div>
 </div>
+
 <script>
-async function load(){
-    try {
-        const res = await fetch("/api/list");
-        const data = await res.json();
-        render("ordinati", data.filter(x => x.stato == "ordinati"), "arrivati", "➔ Arrivato");
-        render("arrivati", data.filter(x => x.stato == "arrivati"), "ritirati", "➔ Ritirato");
-        render("ritirati", data.filter(x => x.stato == "ritirati"), null, null);
-    } catch(e) { console.error(e); }
+function createRows() {
+    let h = "";
+    for(let i=0; i<5; i++) h += `<div class="prod-row"><input type="text" class="p_n" placeholder="Prodotto"><input type="number" class="p_q" value="1" min="1"><input type="text" class="p_nt" placeholder="Note"><select class="p_p"><option value="false">DA PAGARE</option><option value="true">PAGATO</option></select></div>`;
+    document.getElementById("p_rows").innerHTML = h;
 }
-function render(containerId, items, nextStato, btnLabel){
-    let html = "";
+
+async function load() {
+    const res = await fetch("/api/list");
+    const data = await res.json();
+    render("col_ordinati", data.filter(x=>x.stato=="ordinati"), "arrivati", "ARRIVATO");
+    render("col_arrivati", data.filter(x=>x.stato=="arrivati"), "ritirati", "RITIRATO");
+    render("col_ritirati", data.filter(x=>x.stato=="ritirati"), null, null);
+}
+
+function render(id, items, next, label) {
+    let h = "";
     items.forEach(r => {
-        const pagatoBadge = r.pagato ? '<span class="badge-pagato">€ PAGATO</span>' : '<span class="badge-nonpagato">€ DA PAGARE</span>';
-        html += `<div class="item-card status-${r.stato}"><div class="card-header"><p class="card-title">${r.cognome.toUpperCase()} ${r.nome}</p>${pagatoBadge}</div><p class="card-prodotto">${r.quantita}x ${r.prodotto}</p>${r.note ? `<div class="card-note"><b>Nota:</b> ${r.note}</div>` : ''}<div class="actions">${nextStato ? `<button class="btn-action" onclick="move(${r.id},'${nextStato}')">${btnLabel}</button>` : ''}<button class="btn-action btn-del" onclick="del(${r.id})">Elimina</button></div></div>`;
+        // Mostra il tasto split solo se quantita > 1
+        const showSplit = next && r.quantita > 1;
+        h += `<div class="card">
+            <div class="card-name">${r.cognome} ${r.nome}</div>
+            <div class="card-prod">${r.quantita}x ${r.prodotto}</div>
+            <div style="font-size:11px; color:#64748b; margin-bottom:5px">${r.note || ''}</div>
+            <span class="badge ${r.pagato?'bg-paid':'bg-unpaid'}">${r.pagato?'PAGATO':'DA PAGARE'}</span>
+            <div class="actions">
+                ${next ? `<button class="btn-v" onclick="move(${r.id},'${next}')">TUTTO ${label}</button>` : ''}
+                ${showSplit ? `<button class="btn-v btn-split" onclick="split(${r.id},${r.quantita},'${next}')">⚖️ PARZIALE</button>` : ''}
+                <button class="btn-v" style="color:var(--red)" onclick="del(${r.id})">ELIMINA</button>
+            </div>
+        </div>`;
     });
-    document.getElementById(containerId).innerHTML = html;
+    document.getElementById(id).innerHTML = h;
 }
-async function add(){
-    const data = {
-        cognome: document.getElementById("cognome").value,
-        nome: document.getElementById("nome").value,
-        prodotto: document.getElementById("prodotto").value,
-        quantita: document.getElementById("quantita").value,
-        pagato: document.getElementById("pagato").value === "true",
-        note: document.getElementById("note").value
-    };
-    if(!data.cognome || !data.prodotto) return alert("Manca Cognome o Prodotto!");
-    await fetch("/api/new", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)});
-    document.querySelectorAll(".form-card input").forEach(i => { if(i.id!='quantita') i.value="" });
+
+async function split(id, currentQty, nextStato) {
+    let n = prompt(`Quanti pezzi su ${currentQty} sono ${nextStato == 'arrivati' ? 'ARRIVATI' : 'RITIRATI'}?`);
+    if(!n || n <= 0) return;
+    if(parseInt(n) >= currentQty) return move(id, nextStato); // Se mette lo stesso numero o più, sposta tutto
+    await fetch("/api/split", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, qty_moved:n, next_stato:nextStato})});
     load();
 }
-async function move(id, stato){
+
+async function save() {
+    const prodotti = [];
+    document.querySelectorAll(".prod-row").forEach(r => {
+        let n = r.querySelector(".p_n").value;
+        if(n) prodotti.push({prodotto:n, quantita:r.querySelector(".p_q").value, note:r.querySelector(".p_nt").value, pagato:r.querySelector(".p_p").value=="true"});
+    });
+    if(!document.getElementById("m_cog").value || prodotti.length==0) return alert("Inserisci Cognome e Prodotto!");
+    await fetch("/api/new_multiple", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({cognome:document.getElementById("m_cog").value, nome:document.getElementById("m_nom").value, prodotti})});
+    document.getElementById("m_cog").value=""; document.getElementById("m_nom").value=""; createRows(); load();
+}
+
+async function move(id, stato) {
     await fetch("/api/move", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, stato})});
     load();
 }
-async function del(id){
-    if(confirm("Eliminare?")) {
-        await fetch("/api/delete", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id})});
-        load();
-    }
-}
-load();
-setInterval(load, 15000);
+
+async function del(id) { if(confirm("Eliminare voce selezionata?")) { await fetch("/api/delete", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id})}); load(); } }
+
+createRows(); load();
+setInterval(load, 20000);
+setInterval(() => { document.getElementById("clock").innerText = new Date().toLocaleTimeString('it-IT'); }, 1000);
 </script>
 </body>
 </html>
-"""
-
-if __name__ == "__main__":
-    init_db()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
