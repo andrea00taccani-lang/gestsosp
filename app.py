@@ -42,7 +42,6 @@ def new():
 def move():
     d = request.json
     conn = get_conn(); cur = conn.cursor()
-    # Logica di raggruppamento automatica durante lo spostamento
     cur.execute("SELECT cognome, nome, prodotto, note, pagato, quantita FROM sospesi WHERE id=%s", (d['id'],))
     i = cur.fetchone()
     cur.execute("SELECT id FROM sospesi WHERE cognome=%s AND nome=%s AND prodotto=%s AND note=%s AND pagato=%s AND stato=%s", (i[0],i[1],i[2],i[3],i[4],d['stato']))
@@ -85,23 +84,18 @@ PAGE_HTML = """
         .item-row:last-child{border-bottom:none}
         .item-prod{font-weight:700;color:#16a34a;font-size:15px}
         .is-ssn{background:#fff1f2;border-radius:6px;padding:4px}
-        .badge-pay{font-size:10px;font-weight:800;padding:3px 8px;border-radius:4px;text-transform:uppercase}
+        .badge-pay{font-size:12px;font-weight:800;padding:5px 12px;border-radius:6px;text-transform:uppercase;letter-spacing:0.5px}
         .p-ok{background:#dcfce7;color:#166534}.p-no{background:#fee2e2;color:#991b1b}
         .actions{display:flex;gap:5px;margin-top:8px}
-        .btn-v{flex:1;padding:6px;font-size:11px;font-weight:bold;cursor:pointer;border:1px solid #e2e8f0;background:white;border-radius:4px;color:#475569}
+        .btn-v{flex:1;padding:8px;font-size:11px;font-weight:bold;cursor:pointer;border:1px solid #e2e8f0;background:white;border-radius:4px;color:#475569}
         .btn-v:hover{background:#f8fafc}
     </style>
 </head>
 <body>
 <div class="container">
-    <div class="header">
-        <h2 style="margin:0;color:#16a34a">🏥 SOSPESI FARMACIA</h2>
-        <div id="clock" style="font-weight:bold;color:#64748b"></div>
-    </div>
+    <div class="header"><h2 style="margin:0;color:#16a34a">🏥 SOSPESI FARMACIA</h2><div id="clock" style="font-weight:bold;color:#64748b"></div></div>
     <div class="entry-box">
-        <div style="display:flex;gap:10px;margin-bottom:12px">
-            <input id="m_c" placeholder="COGNOME" style="flex:1;font-weight:bold;font-size:16px"><input id="m_n" placeholder="Nome" style="flex:1">
-        </div>
+        <div style="display:flex;gap:10px;margin-bottom:12px"><input id="m_c" placeholder="COGNOME" style="flex:1;font-weight:bold;font-size:16px"><input id="m_n" placeholder="Nome" style="flex:1"></div>
         <div id="rows_cont"></div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
             <button onclick="addRow()" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:600">+ Prodotto</button>
@@ -133,15 +127,16 @@ PAGE_HTML = """
     }
     function draw(id,items,next,lbl){
         let h=""; let groups={};
-        items.forEach(r=>{ let k=r.cognome+r.nome; if(!groups[k])groups[k]=[]; groups[k].push(r); });
+        items.forEach(r=>{ let k=r.cognome+r.nome; if(!groups[k])groups[k]={cognome:r.cognome, nome:r.nome, items:[]}; groups[k].items.push(r); });
         for(let k in groups){
             let g=groups[k];
-            h+=`<div class="client-group"><div class="client-name"><span>${g[0].cognome} ${g[0].nome}</span></div>`;
-            g.forEach(r=>{
+            h+=`<div class="client-group"><div class="client-name"><span>${g.cognome} ${g.nome}</span></div>`;
+            g.items.forEach(r=>{
                 let ssn=r.prodotto.includes('RICETTE')?'is-ssn':'';
+                let displayQty = r.prodotto.includes('RICETTE') ? '' : r.quantita + 'x ';
                 h+=`<div class="item-row ${ssn}">
                     <div style="display:flex;justify-content:space-between;align-items:center">
-                        <span class="item-prod">${r.quantita}x ${r.prodotto}</span>
+                        <span class="item-prod">${displayQty}${r.prodotto}</span>
                         <span class="badge-pay ${r.pagato?'p-ok':'p-no'}">${r.pagato?'PAGATO':'DA PAGARE'}</span>
                     </div>
                     ${r.note?`<div style="font-size:11px;color:#64748b;margin-top:2px">Note: ${r.note}</div>`:''}
@@ -173,8 +168,3 @@ PAGE_HTML = """
 </script>
 </body>
 </html>
-"""
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
