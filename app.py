@@ -10,11 +10,9 @@ def get_conn():
     return psycopg2.connect(url)
 
 def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
+    conn = get_conn(); cur = conn.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS sospesi (id SERIAL PRIMARY KEY, cognome TEXT, nome TEXT, prodotto TEXT, quantita INTEGER, note TEXT, pagato BOOLEAN, stato TEXT, updated_at TIMESTAMP)")
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 @app.route("/")
 def home():
@@ -25,7 +23,7 @@ def home():
 def list_items():
     conn = get_conn(); cur = conn.cursor()
     cur.execute("DELETE FROM sospesi WHERE stato='ritirati' AND updated_at < %s", (datetime.datetime.now() - datetime.timedelta(days=7),))
-    cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY cognome ASC")
+    cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY cognome ASC, nome ASC")
     rows = cur.fetchall()
     conn.commit(); conn.close()
     return jsonify([{"id":r[0],"cognome":r[1],"nome":r[2],"prodotto":r[3],"quantita":r[4],"note":r[5],"pagato":r[6],"stato":r[7]} for r in rows])
@@ -44,6 +42,7 @@ def new():
 def move():
     d = request.json
     conn = get_conn(); cur = conn.cursor()
+    # Logica di raggruppamento automatica durante lo spostamento
     cur.execute("SELECT cognome, nome, prodotto, note, pagato, quantita FROM sospesi WHERE id=%s", (d['id'],))
     i = cur.fetchone()
     cur.execute("SELECT id FROM sospesi WHERE cognome=%s AND nome=%s AND prodotto=%s AND note=%s AND pagato=%s AND stato=%s", (i[0],i[1],i[2],i[3],i[4],d['stato']))
@@ -53,22 +52,6 @@ def move():
         cur.execute("DELETE FROM sospesi WHERE id=%s", (d['id'],))
     else:
         cur.execute("UPDATE sospesi SET stato=%s, updated_at=%s WHERE id=%s", (d['stato'], datetime.datetime.now(), d['id']))
-    conn.commit(); conn.close()
-    return "ok"
-
-@app.route("/api/split", methods=["POST"])
-def split():
-    d = request.json
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT cognome, nome, prodotto, note, pagato, quantita FROM sospesi WHERE id=%s", (d['id'],))
-    i = cur.fetchone()
-    qm = int(d['qty'])
-    if qm >= i[5]: return move()
-    cur.execute("UPDATE sospesi SET quantita=quantita-%s WHERE id=%s", (qm, d['id']))
-    cur.execute("SELECT id FROM sospesi WHERE cognome=%s AND nome=%s AND prodotto=%s AND note=%s AND pagato=%s AND stato=%s", (i[0],i[1],i[2],i[3],i[4],d['next']))
-    ex = cur.fetchone()
-    if ex: cur.execute("UPDATE sospesi SET quantita=quantita+%s WHERE id=%s", (qm, ex[0]))
-    else: cur.execute("INSERT INTO sospesi (cognome, nome, prodotto, note, pagato, quantita, stato, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", (i[0],i[1],i[2],i[3],i[4],qm,d['next'],datetime.datetime.now()))
     conn.commit(); conn.close()
     return "ok"
 
@@ -84,84 +67,108 @@ PAGE_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8"><title>Farmacia Gold</title>
+    <meta charset="UTF-8"><title>Gestionale Farmacia</title>
     <style>
-        body{font-family:sans-serif;background:#f1f5f9;margin:0;padding:10px}
-        .card{background:white;padding:12px;border-radius:8px;margin-bottom:10px;box-shadow:0 2px 4px rgba(0,0,0,0.1);border-left:6px solid #94a3b8}
-        .card-ssn{background:#ffe5ec;border-left-color:#ff8fab}
-        .badge{display:block;padding:8px;border-radius:4px;font-weight:900;text-align:center;margin-bottom:8px;color:white}
-        .bg-p{background:#2dc653}.bg-np{background:#e11d48}
-        .btn-v{flex:1;padding:6px;font-size:10px;font-weight:bold;cursor:pointer;border:1px solid #ccc;background:white}
-        .column{background:#dfe7ef;padding:10px;border-radius:10px;min-height:70vh}
-        .prod-row{display:grid;grid-template-columns:2fr 60px 1fr 120px 30px;gap:5px;margin-bottom:5px}
+        body{font-family:'Segoe UI',sans-serif;background:#f8fafc;margin:0;padding:10px;color:#1e293b}
+        .container{max-width:1600px;margin:0 auto}
+        .header{background:white;padding:10px 20px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,0.1);margin-bottom:10px}
+        .entry-box{background:white;padding:15px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.05);margin-bottom:15px;border-top:4px solid #16a34a}
+        .prod-row{display:grid;grid-template-columns:2fr 80px 1.5fr 130px 40px;gap:8px;margin-bottom:8px;background:#f1f5f9;padding:6px;border-radius:6px}
+        input,select{padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px}
+        .btn-main{background:#16a34a;color:white;border:none;padding:14px;border-radius:8px;font-weight:bold;cursor:pointer;width:100%;font-size:16px}
+        .btn-ssn{background:#ec4899;color:white;border:none;padding:8px 15px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:13px;width:120px}
+        .column{background:#f1f5f9;padding:12px;border-radius:12px;min-height:75vh;border:1px solid #e2e8f0}
+        .column h3{text-align:center;font-size:13px;color:#64748b;text-transform:uppercase;margin:0 0 10px 0}
+        .client-group{background:white;border-radius:10px;padding:10px;margin-bottom:15px;box-shadow:0 2px 4px rgba(0,0,0,0.05);border:1px solid #e2e8f0}
+        .client-name{font-size:18px;font-weight:900;color:#0f172a;text-transform:uppercase;border-bottom:2px solid #f1f5f9;padding-bottom:5px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+        .item-row{padding:8px;border-bottom:1px solid #f8fafc;position:relative}
+        .item-row:last-child{border-bottom:none}
+        .item-prod{font-weight:700;color:#16a34a;font-size:15px}
+        .is-ssn{background:#fff1f2;border-radius:6px;padding:4px}
+        .badge-pay{font-size:10px;font-weight:800;padding:3px 8px;border-radius:4px;text-transform:uppercase}
+        .p-ok{background:#dcfce7;color:#166534}.p-no{background:#fee2e2;color:#991b1b}
+        .actions{display:flex;gap:5px;margin-top:8px}
+        .btn-v{flex:1;padding:6px;font-size:11px;font-weight:bold;cursor:pointer;border:1px solid #e2e8f0;background:white;border-radius:4px;color:#475569}
+        .btn-v:hover{background:#f8fafc}
     </style>
 </head>
 <body>
-    <div style="background:white;padding:10px;border-radius:8px;margin-bottom:10px;display:flex;justify-content:space-between">
-        <h2 style="margin:0;color:#1a7431">🏥 SOSPESI FARMACIA</h2><b id="clock"></b>
+<div class="container">
+    <div class="header">
+        <h2 style="margin:0;color:#16a34a">🏥 SOSPESI FARMACIA</h2>
+        <div id="clock" style="font-weight:bold;color:#64748b"></div>
     </div>
-    <input type="text" id="search" placeholder="🔍 CERCA COGNOME O FARMACO..." oninput="renderAll()" style="width:100%;padding:12px;margin-bottom:10px;box-sizing:border-box;font-weight:bold">
-    <div style="background:white;padding:15px;border-radius:10px;margin-bottom:10px;border-top:4px solid #1a7431">
-        <div style="display:flex;gap:10px;margin-bottom:10px">
-            <input id="m_c" placeholder="COGNOME" style="flex:1;font-weight:bold"><input id="m_n" placeholder="Nome" style="flex:1">
+    <div class="entry-box">
+        <div style="display:flex;gap:10px;margin-bottom:12px">
+            <input id="m_c" placeholder="COGNOME" style="flex:1;font-weight:bold;font-size:16px"><input id="m_n" placeholder="Nome" style="flex:1">
         </div>
-        <div id="rows"></div>
-        <button onclick="addRow()">+ AGGIUNGI PRODOTTO</button>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            <button onclick="save()" style="background:#1a7431;color:white;padding:10px;font-weight:bold">✅ REGISTRA</button>
-            <button onclick="saveSSN()" style="background:#fb6f92;color:white;padding:10px;font-weight:bold">💊 RICETTE SSN</button>
+        <div id="rows_cont"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+            <button onclick="addRow()" style="background:#f1f5f9;border:1px solid #cbd5e1;padding:8px 15px;border-radius:6px;cursor:pointer;font-weight:600">+ Prodotto</button>
+            <button class="btn-ssn" onclick="saveSSN()">💊 RICETTE</button>
         </div>
+        <button class="btn-main" onclick="save()" style="margin-top:15px">REGISTRA ORDINE</button>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:10px">
+    <input type="text" id="search" placeholder="🔍 Ricerca rapida per cognome o farmaco..." oninput="renderAll()" style="width:100%;padding:14px;border-radius:10px;border:2px solid #e2e8f0;margin-bottom:15px;box-sizing:border-box;font-weight:bold">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:15px">
         <div class="column"><h3>📦 DA ORDINARE</h3><div id="col_1"></div></div>
         <div class="column"><h3>🚚 IN FARMACIA</h3><div id="col_2"></div></div>
         <div class="column"><h3>✅ RITIRATI</h3><div id="col_3"></div></div>
     </div>
+</div>
 <script>
     let data = [];
     function addRow(){
-        let d = document.createElement('div'); d.className='prod-row';
-        d.innerHTML='<input class="pn" placeholder="Farmaco"><input type="number" class="pq" value="1"><input class="nt" placeholder="Note"><select class="pp"><option value="false">DA PAGARE</option><option value="true">PAGATO</option></select><button onclick="this.parentElement.remove()">X</button>';
-        document.getElementById('rows').appendChild(d);
+        let d=document.createElement('div');d.className='prod-row';
+        d.innerHTML='<input class="pn" placeholder="Farmaco"><input type="number" class="pq" value="1"><input class="nt" placeholder="Note"><select class="pp"><option value="false">DA PAGARE</option><option value="true">PAGATO</option></select><button onclick="this.parentElement.remove()" style="border:none;background:none;color:red;cursor:pointer;font-weight:bold">X</button>';
+        document.getElementById('rows_cont').appendChild(d);
     }
-    async function load(){ data = await (await fetch('/api/list')).json(); renderAll(); }
+    async function load(){ data=await(await fetch('/api/list')).json(); renderAll(); }
     function renderAll(){
-        let t = document.getElementById('search').value.toLowerCase();
-        let f = data.filter(x => x.cognome.toLowerCase().includes(t) || x.prodotto.toLowerCase().includes(t));
-        draw("col_1", f.filter(x=>x.stato=='ordinati'), "arrivati", "ARRIVATO");
-        draw("col_2", f.filter(x=>x.stato=='arrivati'), "ritirati", "RITIRATO");
-        draw("col_3", f.filter(x=>x.stato=='ritirati'), null, null);
+        let t=document.getElementById('search').value.toLowerCase();
+        let f=data.filter(x=>x.cognome.toLowerCase().includes(t)||x.prodotto.toLowerCase().includes(t));
+        draw("col_1",f.filter(x=>x.stato=='ordinati'),"arrivati","ARRIVATO");
+        draw("col_2",f.filter(x=>x.stato=='arrivati'),"ritirati","RITIRATO");
+        draw("col_3",f.filter(x=>x.stato=='ritirati'),null,null);
     }
-    function draw(id, items, next, lbl){
-        let h = "";
-        items.forEach(r => {
-            h += `<div class="card ${r.prodotto.includes('RICETTE')?'card-ssn':''}">
-                <div class="badge ${r.pagato?'bg-p':'bg-np'}">${r.pagato?'PAGATO':'DA PAGARE'}</div>
-                <b>${r.cognome} ${r.nome}</b><br><i style="color:#1a7431">${r.quantita}x ${r.prodotto}</i>
-                <div style="font-size:10px;color:#666">${r.note||''}</div>
-                <div style="display:flex;gap:4px;margin-top:8px">
-                    ${next?`<button class="btn-v" onclick="move(${r.id},'${next}')">${lbl}</button>${r.quantita>1?`<button class="btn-v" onclick="split(${r.id},${r.quantita},'${next}')">⚖️ PARZIALE</button>`:''}`:''}
-                    <button class="btn-v" style="color:red" onclick="del(${r.id})">Elimina</button>
-                </div></div>`;
-        });
-        document.getElementById(id).innerHTML = h;
+    function draw(id,items,next,lbl){
+        let h=""; let groups={};
+        items.forEach(r=>{ let k=r.cognome+r.nome; if(!groups[k])groups[k]=[]; groups[k].push(r); });
+        for(let k in groups){
+            let g=groups[k];
+            h+=`<div class="client-group"><div class="client-name"><span>${g[0].cognome} ${g[0].nome}</span></div>`;
+            g.forEach(r=>{
+                let ssn=r.prodotto.includes('RICETTE')?'is-ssn':'';
+                h+=`<div class="item-row ${ssn}">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span class="item-prod">${r.quantita}x ${r.prodotto}</span>
+                        <span class="badge-pay ${r.pagato?'p-ok':'p-no'}">${r.pagato?'PAGATO':'DA PAGARE'}</span>
+                    </div>
+                    ${r.note?`<div style="font-size:11px;color:#64748b;margin-top:2px">Note: ${r.note}</div>`:''}
+                    <div class="actions">
+                        ${next?`<button class="btn-v" onclick="move(${r.id},'${next}')">${lbl}</button>`:''}
+                        <button class="btn-v" style="color:#ef4444" onclick="del(${r.id})">ELIMINA</button>
+                    </div></div>`;
+            });
+            h+=`</div>`;
+        }
+        document.getElementById(id).innerHTML=h;
     }
     async function save(){
-        let p = []; document.querySelectorAll('.prod-row').forEach(r=>{
-            let n = r.querySelector('.pn').value; if(n) p.push({prodotto:n,quantita:r.querySelector('.pq').value,note:r.querySelector('.nt').value,pagato:r.querySelector('.pp').value=='true'});
+        let p=[]; document.querySelectorAll('.prod-row').forEach(r=>{
+            let n=r.querySelector('.pn').value; if(n)p.push({prodotto:n,quantita:r.querySelector('.pq').value,note:r.querySelector('.nt').value,pagato:r.querySelector('.pp').value=='true'});
         });
         await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cognome:document.getElementById('m_c').value,nome:document.getElementById('m_n').value,prodotti:p})});
         reset();
     }
     async function saveSSN(){
-        await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cognome:document.getElementById('m_c').value,nome:document.getElementById('m_n').value,prodotti:[{prodotto:'RICETTE CARTACEE',quantita:1,note:'Cartaceo',pagato:false}]})});
+        await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cognome:document.getElementById('m_c').value,nome:document.getElementById('m_n').value,prodotti:[{prodotto:'RICETTE CARTACEE',quantita:1,note:'',pagato:false}]})});
         reset();
     }
-    function reset(){ document.getElementById('m_c').value="";document.getElementById('m_n').value="";document.getElementById('rows').innerHTML="";addRow();load(); }
-    async function move(id,stato){ await fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,stato})}); load(); }
-    async function split(id,q,s){ let n=prompt("Quanti pezzi?"); if(n>0&&n<=q) { await fetch('/api/split',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,qty:n,next:s})}); load(); } }
-    async function del(id){ if(confirm("Elimina?")){ await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); load(); } }
-    addRow(); load(); setInterval(load,30000);
+    function reset(){document.getElementById('m_c').value="";document.getElementById('m_n').value="";document.getElementById('rows_cont').innerHTML="";addRow();load();}
+    async function move(id,stato){await fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,stato})});load();}
+    async function del(id){if(confirm("Elimina?")){await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});load();}}
+    addRow();load();setInterval(load,30000);
     setInterval(()=>{document.getElementById('clock').innerText=new Date().toLocaleTimeString('it-IT')},1000);
 </script>
 </body>
