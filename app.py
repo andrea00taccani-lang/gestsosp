@@ -35,7 +35,8 @@ def init_db():
         """)
         conn.commit()
         cur.close()
-    except Exception as e: print(f"Errore DB: {e}")
+    except Exception as e:
+        print(f"Errore DB: {e}")
     finally:
         if conn: conn.close()
 
@@ -54,8 +55,9 @@ def list_items():
         cur.execute("DELETE FROM sospesi WHERE stato='ritirati' AND updated_at < %s", (limit,))
         cur.execute("SELECT id, cognome, nome, prodotto, quantita, note, pagato, stato FROM sospesi ORDER BY cognome ASC, nome ASC")
         rows = cur.fetchall()
-        return jsonify([{"id":r,"cognome":r,"nome":r,"prodotto":r,"quantita":r,"note":r,"pagato":r,"stato":r} for r in rows])
-    except: return jsonify([])
+        return jsonify([{"id":r[0],"cognome":r[1],"nome":r[2],"prodotto":r[3],"quantita":r[4],"note":r[5],"pagato":r[6],"stato":r[7]} for r in rows])
+    except:
+        return jsonify([])
     finally:
         if conn: conn.close()
 
@@ -132,7 +134,6 @@ PAGE_HTML = """
         .prod-row { display: grid; grid-template-columns: 2fr 70px 1.5fr 130px 40px; gap: 8px; margin-bottom: 5px; }
         input, select { padding: 8px; border: 1px solid #ccc; border-radius: 5px; }
         .btn-add-row { background: #eee; border: 1px solid #ccc; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-weight: bold; margin-bottom: 10px; }
-        .btn-add-row:hover { background: #ddd; }
         .btn-save { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; font-size: 16px; }
         .btn-ricette { background: var(--accent); color: white; border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; }
         .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 12px; align-items: start; }
@@ -151,9 +152,7 @@ PAGE_HTML = """
 <body>
 <div class="container">
     <div class="header"><h1 style="margin:0; font-size:18px; color:var(--primary)">🏥 GESTIONE SOSPESI</h1><div id="clock" style="font-weight:bold; color:#666"></div></div>
-    
     <div class="search-section"><input type="text" id="main_search" placeholder="🔍 CERCA PER COGNOME O PRODOTTO..." oninput="filterAndRender()"></div>
-
     <div class="entry-box">
         <div class="client-inputs">
             <input type="text" id="m_cog" placeholder="COGNOME" style="flex:1; font-weight:bold">
@@ -166,39 +165,25 @@ PAGE_HTML = """
             <button class="btn-ricette" onclick="saveRicette()">💊 AGGIUNGI RICETTE</button>
         </div>
     </div>
-
     <div class="board">
         <div class="column"><h2>📦 ORDINATI</h2><div id="col_ordinati"></div></div>
         <div class="column"><h2>🚚 IN FARMACIA</h2><div id="col_arrivati"></div></div>
         <div class="column"><h2>✅ RITIRATI</h2><div id="col_ritirati"></div></div>
     </div>
 </div>
-
 <script>
 let currentData = [];
-
 function addRow() {
     const div = document.createElement('div');
     div.className = 'prod-row';
-    div.innerHTML = `
-        <input type="text" class="p_n" placeholder="Prodotto">
-        <input type="number" class="p_q" value="1" min="1">
-        <input type="text" class="p_nt" placeholder="Note">
-        <select class="p_p">
-            <option value="false">DA PAGARE</option>
-            <option value="true">PAGATO</option>
-        </select>
-        <button onclick="this.parentElement.remove()" style="color:red; border:none; background:none; cursor:pointer; font-weight:bold">X</button>
-    `;
+    div.innerHTML = `<input type="text" class="p_n" placeholder="Prodotto"><input type="number" class="p_q" value="1" min="1"><input type="text" class="p_nt" placeholder="Note"><select class="p_p"><option value="false">DA PAGARE</option><option value="true">PAGATO</option></select><button onclick="this.parentElement.remove()" style="color:red; border:none; background:none; cursor:pointer; font-weight:bold">X</button>`;
     document.getElementById("p_rows").appendChild(div);
 }
-
 async function load() {
     const res = await fetch("/api/list");
     currentData = await res.json();
     filterAndRender();
 }
-
 function filterAndRender() {
     const t = document.getElementById("main_search").value.toLowerCase();
     const f = currentData.filter(x => x.cognome.toLowerCase().includes(t) || x.prodotto.toLowerCase().includes(t));
@@ -206,17 +191,15 @@ function filterAndRender() {
     render("col_arrivati", f.filter(x=>x.stato=="arrivati"), "ritirati", "RITIRATO");
     render("col_ritirati", f.filter(x=>x.stato=="ritirati"), null, null);
 }
-
 function render(id, items, next, label) {
     let h = "";
     items.forEach(r => {
-        h += `<div class="card"><div class="card-name">${r.cognome} ${r.nome || ''}</div><div class="card-prod">${r.quantita}x ${r.prodotto} ${r.prodotto=='RICETTE CARTACEE'?'📄':''}</div><div style="font-size:10px; color:#666">${r.note || ''}</div><span class="badge ${r.pagato?'bg-paid':'bg-unpaid'}">${r.pagato?'PAGATO':'DA PAGARE'}</span><div class="actions">
+        h += `<div class="card"><div class="card-name">${r.cognome} ${r.nome || ''}</div><div class="card-prod">${r.quantita}x ${r.prodotto}</div><span class="badge ${r.pagato?'bg-paid':'bg-unpaid'}">${r.pagato?'PAGATO':'DA PAGARE'}</span><div class="actions">
             ${next ? `<button class="btn-v" onclick="move(${r.id},'${next}')">TUTTO ${label}</button>${r.quantita>1 ? `<button class="btn-v" style="color:var(--accent)" onclick="split(${r.id},${r.quantita},'${next}')">⚖️ PARZIALE</button>` : ''}` : ''}
             <button class="btn-v" style="color:var(--red)" onclick="del(${r.id})">ELIMINA</button></div></div>`;
     });
     document.getElementById(id).innerHTML = h;
 }
-
 async function save() {
     const prodotti = [];
     document.querySelectorAll(".prod-row").forEach(r => {
@@ -224,37 +207,37 @@ async function save() {
         if(n) prodotti.push({prodotto:n, quantita:r.querySelector(".p_q").value, note:r.querySelector(".p_nt").value, pagato:r.querySelector(".p_p").value=="true"});
     });
     const cog = document.getElementById("m_cog").value;
-    if(!cog || prodotti.length==0) return alert("Inserisci Cognome e Prodotto!");
+    if(!cog || prodotti.length==0) return alert("Dati mancanti!");
     await fetch("/api/new_multiple", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({cognome:cog, nome:document.getElementById("m_nom").value, prodotti})});
     resetForm();
 }
-
 async function saveRicette() {
     const cog = document.getElementById("m_cog").value;
-    if(!cog) return alert("Inserisci almeno il Cognome!");
-    const prodotti = [{prodotto: "RICETTE CARTACEE", quantita: 1, note: "Sospeso cartaceo", pagato: false}];
+    if(!cog) return alert("Inserisci Cognome!");
+    const prodotti = [{prodotto: "RICETTE CARTACEE", quantita: 1, note: "Cartaceo", pagato: false}];
     await fetch("/api/new_multiple", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({cognome:cog, nome:document.getElementById("m_nom").value, prodotti})});
     resetForm();
 }
-
 function resetForm() {
     document.getElementById("m_cog").value=""; document.getElementById("m_nom").value="";
     document.getElementById("p_rows").innerHTML = "";
     addRow(); load();
 }
-
 async function move(id, stato) { await fetch("/api/move", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, stato})}); load(); }
-
 async function split(id, q, s) { 
     let n = prompt("Pezzi?"); 
     if(n>0 && n<=q) { await fetch("/api/split", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id, qty_moved:n, next_stato:s})}); load(); }
 }
-
 async function del(id) { if(confirm("Eliminare?")) { await fetch("/api/delete", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id})}); load(); } }
-
 addRow(); load();
 setInterval(load, 30000);
 setInterval(() => { document.getElementById("clock").innerText = new Date().toLocaleTimeString('it-IT'); }, 1000);
 </script>
 </body>
 </html>
+"""
+
+if __name__ == "__main__":
+    init_db()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
